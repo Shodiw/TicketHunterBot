@@ -172,11 +172,19 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def do_monitor(chat_id, app):
     u = get_user(chat_id)
     from playwright.async_api import async_playwright
-    pw = None; browser = None
+    
+    pw = None
+    browser = None
     try:
         pw = await async_playwright().start()
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        # Запуск с дополнительными флагами для стабильности на сервере
+        browser = await pw.chromium.launch(
+            headless=True, 
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
         page = await browser.new_page()
+        
+        log.info(f"Мониторинг запущен для чата {chat_id}")
         while True:
             try:
                 await page.goto(u["url"], timeout=60000, wait_until="networkidle")
