@@ -80,11 +80,23 @@ def kb_main():
 def kb_settings():
     return ReplyKeyboardMarkup([
         ["⏱ Интервал", "🚆 Поезд"],
-        ["💺 Тип мест", "🔙 Назад"]
+        ["💺 Тип мест", "🚋 Тип вагона"],
+        ["🔙 Назад"]
     ], resize_keyboard=True)
 
 def kb_seats():
     return ReplyKeyboardMarkup([["🔽 Только нижние", "🔄 Любые"], ["🔙 Назад"]], resize_keyboard=True)
+
+def kb_car_types(chat_id=None):
+    opts = []
+    user_car_types = get_user(chat_id)["car_types"] if chat_id else [3, 4]
+    for ct_id, name in CAR_NAMES.items():
+        emoji = "✅" if ct_id in user_car_types else "⬜"
+        opts.append(f"{emoji} {name}")
+    row1 = [opts[0], opts[1]]  # Сидячий, Плацкарт
+    row2 = [opts[2], opts[3]]  # Купе, Мягкий
+    row3 = [opts[4], "🔙 Назад"]  # СВ, Назад
+    return ReplyKeyboardMarkup([row1, row2, row3], resize_keyboard=True)
 
 # ── ОБРАБОТКА ТЕКСТА ──────────────────────────────────────────────────────────
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -116,11 +128,13 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         active = "🟢 Активен" if u["task"] and not u["task"].done() else "🔴 Выключен"
         tr = u["trains"][0] if u["trains"] else "Все"
         seats = "Только нижние" if u["lower_only"] else "Любые"
+        cars = ", ".join([CAR_NAMES[c] for c in u["car_types"]])
         msg = (f"<b>ТЕКУЩИЙ СТАТУС</b>\n\n"
                f"📡 Мониторинг: {active}\n"
                f"⏱ Интервал: {u['interval']} сек\n"
                f"🚆 Поезд: {tr}\n"
-               f"🪑 Места: {seats}\n\n"
+               f"🪑 Места: {seats}\n"
+               f"🚋 Типы вагонов: {cars}\n\n"
                f"🔗 URL: {u['url'] or 'Не задан'}")
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
@@ -138,6 +152,10 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif text == "💺 Тип мест":
         await update.message.reply_text("Какие места искать?", reply_markup=kb_seats())
 
+    elif text == "🚋 Тип вагона":
+        u["state"] = "SET_CAR_TYPES"
+        await update.message.reply_text("Выберите типы вагонов (нажимайте на кнопки):", reply_markup=kb_car_types(chat_id))
+
     elif text == "🔽 Только нижние":
         u["lower_only"] = True
         await update.message.reply_text("✅ Теперь ищем только нижние места.", reply_markup=kb_settings())
@@ -145,6 +163,23 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif text == "🔄 Любые":
         u["lower_only"] = False
         await update.message.reply_text("✅ Теперь ищем любые места.", reply_markup=kb_settings())
+
+    elif text.startswith("⬜") or text.startswith("✅"):
+        if u["state"] != "SET_CAR_TYPES":
+            return
+        name = text.split(" ", 1)[1]
+        ct_id = None
+        for cid, cname in CAR_NAMES.items():
+            if cname == name:
+                ct_id = cid
+                break
+        if ct_id is not None:
+            if ct_id in u["car_types"]:
+                u["car_types"].remove(ct_id)
+            else:
+                u["car_types"].append(ct_id)
+            await update.message.reply_text(f"✅ Выбор обновлён. Текущие: {[CAR_NAMES[c] for c in u['car_types']]}", reply_markup=kb_car_types(chat_id))
+        return
 
     elif text == "🔙 Назад":
         u["state"] = "IDLE"
@@ -202,12 +237,19 @@ async def do_monitor(chat_id, app):
                 new = [f for f in found if f["train"] not in u["alerted"]]
                 if new:
                     for f in new:
+                        car_info = []
+                        for d in f["details"]:
+                            ct_name = CAR_NAMES.get(d["ct"], "Неизвестно")
+                            car_info.append(f"{ct_name}: {d['n']} мест")
+                        cars_str = ", ".join(car_info) if car_info else ""
+                        
                         msg = (f"❗ <b>БИЛЕТЫ В ПРОДАЖЕ</b>\n\n"
                                f"🚆 Поезд: <b>{f['train']}</b>\n"
                                f"📍 {f['from']} ➡ {f['to']}\n"
-                               f"🕒 Отправление: {f['dep']}")
+                               f"🕒 Отправление: {f['dep']}\n"
+                               f"🚋 Вагоны: {cars_str}")
                         await app.bot.send_message(chat_id, msg, parse_mode=ParseMode.HTML)
-                        u["history"].insert(0, f"✅ {datetime.datetime.now().strftime('%H:%M')} - Поезд {f['train']}")
+                        u["history"].insert(0, f"✅ {datetime.datetime.now().strftime('%H:%M')} - Поезд {f['train']} ({cars_str})")
                     u["alerted"].update(f["train"] for f in new)
                 else:
                     u["alerted"] &= {f["train"] for f in found}
